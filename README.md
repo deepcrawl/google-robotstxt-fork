@@ -1,4 +1,17 @@
 
+# DeepCrawl notes
+
+The library has been modified to match the google robots.txt specification.
+Precisely we switched off the flag that allows common typose in robotst.txt file.
+
+### Pulling from original repo
+
+```bash
+git remote add public https://github.com/google/robotstxt.git
+git pull public master # Creates a merge commit
+git push origin master
+```
+
 # Google Robots.txt Parser and Matcher Library
 
 The repository contains Google's robots.txt parser and matcher as a C++ library

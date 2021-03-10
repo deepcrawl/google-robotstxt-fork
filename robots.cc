@@ -36,7 +36,7 @@
 #include "absl/strings/string_view.h"
 
 // Allow for typos such as DISALOW in robots.txt.
-static bool kAllowFrequentTypos = true;
+static bool kAllowFrequentTypos = false;
 
 namespace googlebot {
 
