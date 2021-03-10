@@ -2,7 +2,7 @@
 # DeepCrawl notes
 
 The library has been modified to match the google robots.txt specification.
-Precisely we switched off the flag that allows common typose in robotst.txt file.
+Precisely we switched off the flag that allows common typos in robotst.txt file.
 
 ### Pulling from original repo
 
