@@ -1,4 +1,6 @@
 
+## Please do not use this library. We cannot guarantee it's stable.
+
 # DeepCrawl notes
 
 The library has been modified to match the google robots.txt specification.
