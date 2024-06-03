@@ -1,6 +1,6 @@
-package(default_visibility = ["//visibility:public"])
-
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
 
 licenses(["notice"])
 
@@ -15,9 +15,20 @@ cc_library(
         "robots.h",
     ],
     deps = [
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/container:fixed_array",
-        "@com_google_absl//absl/strings",
+        "@abseil-cpp//absl/base:core_headers",
+        "@abseil-cpp//absl/container:fixed_array",
+        "@abseil-cpp//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "reporting_robots",
+    srcs = ["reporting_robots.cc"],
+    hdrs = ["reporting_robots.h"],
+    deps = [
+        ":robots",
+        "@abseil-cpp//absl/container:btree",
+        "@abseil-cpp//absl/strings",
     ],
 )
 
@@ -26,8 +37,19 @@ cc_test(
     srcs = ["robots_test.cc"],
     deps = [
         ":robots",
-        "@com_google_absl//absl/strings",
-        "@com_google_googletest//:gtest_main",
+        "@abseil-cpp//absl/strings",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "reporting_robots_test",
+    srcs = ["reporting_robots_test.cc"],
+    deps = [
+        ":reporting_robots",
+        ":robots",
+        "@abseil-cpp//absl/strings",
+        "@googletest//:gtest_main",
     ],
 )
 

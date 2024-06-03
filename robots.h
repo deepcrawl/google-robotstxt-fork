@@ -18,7 +18,7 @@
 //
 // This file implements the standard defined by the Robots Exclusion Protocol
 // (REP) internet draft (I-D).
-//   https://tools.ietf.org/html/draft-koster-rep
+//   https://www.rfc-editor.org/rfc/rfc9309.html
 //
 // Google doesn't follow the standard strictly, because there are a lot of
 // non-conforming robots.txt files out there, and we err on the side of
@@ -26,7 +26,7 @@
 //
 // An more user-friendly description of how Google handles robots.txt can be
 // found at:
-//   https://developers.google.com/search/reference/robots_txt
+//   https://developers.google.com/search/docs/crawling-indexing/robots/robots_txt
 //
 // This library provides a low-level parser for robots.txt (ParseRobotsTxt()),
 // and a matcher for URLs against a robots.txt (class RobotsMatcher).
@@ -63,6 +63,28 @@ class RobotsParseHandler {
   // Any other unrecognized name/value pairs.
   virtual void HandleUnknownAction(int line_num, absl::string_view action,
                                    absl::string_view value) = 0;
+
+  struct LineMetadata {
+    // Indicates if the line is totally empty.
+    bool is_empty = false;
+    // Indicates if the line has a comment (may have content before it).
+    bool has_comment = false;
+    // Indicates if the whole line is a comment.
+    bool is_comment = false;
+    // Indicates that the line has a valid robots.txt directive and one of the
+    // `Handle*` methods will be called.
+    bool has_directive = false;
+    // Indicates that the found directive is one of the acceptable typo variants
+    // of the directive. See the key functions in ParsedRobotsKey for accepted
+    // typos.
+    bool is_acceptable_typo = false;
+    // Indicates that the line is too long, specifically over 2083 * 8 bytes.
+    bool is_line_too_long = false;
+    // Indicates that the key-value pair is missing the colon separator.
+    bool is_missing_colon_separator = false;
+  };
+
+  virtual void ReportLineMetadata(int line_num, const LineMetadata& metadata) {}
 };
 
 // Parses body of a robots.txt and emits parse callbacks. This will accept
@@ -136,7 +158,7 @@ class RobotsMatcher : protected RobotsParseHandler {
   bool ever_seen_specific_agent() const;
 
   // Returns the line that matched or 0 if none matched.
-  const int matching_line() const;
+  int matching_line() const;
 
  protected:
   // Parse callbacks.
@@ -145,7 +167,7 @@ class RobotsMatcher : protected RobotsParseHandler {
   void HandleRobotsStart() override;
   void HandleRobotsEnd() override {}
 
-  void HandleUserAgent(int line_num, absl::string_view value) override;
+  void HandleUserAgent(int line_num, absl::string_view user_agent) override;
   void HandleAllow(int line_num, absl::string_view value) override;
   void HandleDisallow(int line_num, absl::string_view value) override;
 
@@ -212,15 +234,15 @@ class RobotsMatcher : protected RobotsParseHandler {
   // For each of the directives within user-agents, we keep global and specific
   // match scores.
   struct MatchHierarchy {
-    Match global;            // Match for '*'
-    Match specific;          // Match for queried agent.
+    Match global;    // Match for '*'
+    Match specific;  // Match for queried agent.
     void Clear() {
       global.Clear();
       specific.Clear();
     }
   };
-  MatchHierarchy allow_;       // Characters of 'url' matching Allow.
-  MatchHierarchy disallow_;    // Characters of 'url' matching Disallow.
+  MatchHierarchy allow_;     // Characters of 'url' matching Allow.
+  MatchHierarchy disallow_;  // Characters of 'url' matching Disallow.
 
   bool seen_global_agent_;         // True if processing global agent rules.
   bool seen_specific_agent_;       // True if processing our specific agent.

@@ -17,7 +17,7 @@ git push origin master
 # Google Robots.txt Parser and Matcher Library
 
 The repository contains Google's robots.txt parser and matcher as a C++ library
-(compliant to C++11).
+(compliant to C++14).
 
 ## About the library
 
@@ -49,7 +49,7 @@ user-agent and URL. Running the included binary requires:
 
 *   A compatible platform (e.g. Windows, macOS, Linux, etc.). Most platforms are
     fully supported.
-*   A compatible C++ compiler supporting at least C++11. Most major compilers
+*   A compatible C++ compiler supporting at least C++14. Most major compilers
     are supported.
 *   [Git](https://git-scm.com/) for interacting with the source code repository.
     To install Git, consult the
@@ -147,8 +147,8 @@ Apache license. See LICENSE for more information.
 To learn more about this project:
 
 *   check out the
-    [internet draft](https://tools.ietf.org/html/draft-koster-rep),
+    [Robots Exclusion Protocol standard](https://www.rfc-editor.org/rfc/rfc9309.html),
 *   how
-    [Google's handling robots.txt](https://developers.google.com/search/reference/robots_txt),
+    [Google Handles robots.txt](https://developers.google.com/search/reference/robots_txt),
 *   or for a high level overview, the
     [robots.txt page on Wikipedia](https://en.wikipedia.org/wiki/Robots_exclusion_standard).

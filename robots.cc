@@ -25,7 +25,11 @@
 
 #include <stdlib.h>
 
+#include <cassert>
+#include <cctype>
 #include <cstddef>
+#include <cstring>
+#include <string>
 #include <vector>
 
 #include "absl/base/macros.h"
@@ -239,9 +243,11 @@ class ParsedRobotsKey {
   ParsedRobotsKey(const ParsedRobotsKey&) = delete;
   ParsedRobotsKey& operator=(const ParsedRobotsKey&) = delete;
 
-  // Parse given key text. Does not copy the text, so the text_key must stay
-  // valid for the object's life-time or the next Parse() call.
-  void Parse(absl::string_view key);
+  // Parse given key text and report in the is_acceptable_typo output parameter
+  // whether the key is one of the accepted typo-variants of a supported key.
+  // Does not copy the text, so the text_key must stay valid for the object's
+  // life-time or the next Parse() call.
+  void Parse(absl::string_view key, bool* is_acceptable_typo);
 
   // Returns the type of key.
   KeyType type() const { return type_; }
@@ -250,10 +256,13 @@ class ParsedRobotsKey {
   absl::string_view GetUnknownText() const;
 
  private:
-  static bool KeyIsUserAgent(absl::string_view key);
-  static bool KeyIsAllow(absl::string_view key);
-  static bool KeyIsDisallow(absl::string_view key);
-  static bool KeyIsSitemap(absl::string_view key);
+  // The KeyIs* methods return whether a passed in key is one of the a supported
+  // keys, and report in the is_acceptable_typo output parameter whether the key
+  // is one of the accepted typo-variants of a supported key.
+  static bool KeyIsUserAgent(absl::string_view key, bool* is_acceptable_typo);
+  static bool KeyIsAllow(absl::string_view key, bool* is_acceptable_typo);
+  static bool KeyIsDisallow(absl::string_view key, bool* is_acceptable_typo);
+  static bool KeyIsSitemap(absl::string_view key, bool* is_acceptable_typo);
 
   KeyType type_;
   absl::string_view key_text_;
@@ -287,10 +296,14 @@ class RobotsTxtParser {
   void Parse();
 
  private:
-  static bool GetKeyAndValueFrom(char ** key, char **value, char *line);
+  // Note that `key` and `value` are only set when `metadata->has_directive
+  // == true`.
+  static void GetKeyAndValueFrom(char** key, char** value, char* line,
+                                 RobotsParseHandler::LineMetadata* metadata);
   static void StripWhitespaceSlowly(char ** s);
 
-  void ParseAndEmitLine(int current_line, char* line);
+  void ParseAndEmitLine(int current_line, char* line,
+                        bool* line_too_long_strict);
   bool NeedEscapeValueForKey(const Key& key);
 
   absl::string_view robots_body_;
@@ -314,14 +327,25 @@ bool RobotsTxtParser::NeedEscapeValueForKey(const Key& key) {
   (*s)[stripped.size()] = '\0';
 }
 
-bool RobotsTxtParser::GetKeyAndValueFrom(char ** key, char ** value,
-                                         char * line) {
+void RobotsTxtParser::GetKeyAndValueFrom(
+    char** key, char** value, char* line,
+    RobotsParseHandler::LineMetadata* metadata) {
   // Remove comments from the current robots.txt line.
   char* const comment = strchr(line, '#');
   if (nullptr != comment) {
-          *comment = '\0';
+    metadata->has_comment = true;
+    *comment = '\0';
   }
   StripWhitespaceSlowly(&line);
+  // If the line became empty after removing the comment, return.
+  if (strlen(line) == 0) {
+    if (metadata->has_comment) {
+      metadata->is_comment = true;
+    } else {
+      metadata->is_empty = true;
+    }
+    return;
+  }
 
   // Rules must match the following pattern:
   //   <key>[ \t]*:[ \t]*<value>
@@ -339,12 +363,13 @@ bool RobotsTxtParser::GetKeyAndValueFrom(char ** key, char ** value,
         // sequences of non-whitespace characters.  If we get here, there were
         // more than 2 such sequences since we stripped trailing whitespace
         // above.
-        return false;
+        return;
       }
+      metadata->is_missing_colon_separator = true;
     }
   }
   if (nullptr == sep) {
-    return false;                     // Couldn't find a separator.
+    return;                     // Couldn't find a separator.
   }
 
   *key = line;                        // Key starts at beginning of line.
@@ -354,20 +379,26 @@ bool RobotsTxtParser::GetKeyAndValueFrom(char ** key, char ** value,
   if (strlen(*key) > 0) {
     *value = 1 + sep;                 // Value starts after the separator.
     StripWhitespaceSlowly(value);     // Get rid of any leading whitespace.
-    return true;
-  }
-  return false;
-}
-
-void RobotsTxtParser::ParseAndEmitLine(int current_line, char* line) {
-  char* string_key;
-  char* value;
-  if (!GetKeyAndValueFrom(&string_key, &value, line)) {
+    metadata->has_directive = true;
     return;
   }
+}
 
+void RobotsTxtParser::ParseAndEmitLine(int current_line, char* line,
+                                       bool* line_too_long_strict) {
+  char* string_key;
+  char* value;
+  RobotsParseHandler::LineMetadata line_metadata;
+  // Note that `string_key` and `value` are only set when
+  // `line_metadata->has_directive == true`.
+  GetKeyAndValueFrom(&string_key, &value, line, &line_metadata);
+  line_metadata.is_line_too_long = *line_too_long_strict;
+  if (!line_metadata.has_directive) {
+    handler_->ReportLineMetadata(current_line, line_metadata);
+    return;
+  }
   Key key;
-  key.Parse(string_key);
+  key.Parse(string_key, &line_metadata.is_acceptable_typo);
   if (NeedEscapeValueForKey(key)) {
     char* escaped_value = nullptr;
     const bool is_escaped = MaybeEscapePattern(value, &escaped_value);
@@ -376,6 +407,8 @@ void RobotsTxtParser::ParseAndEmitLine(int current_line, char* line) {
   } else {
     EmitKeyValueToHandler(current_line, key, value, handler_);
   }
+  // Finish adding metadata to the line.
+  handler_->ReportLineMetadata(current_line, line_metadata);
 }
 
 void RobotsTxtParser::Parse() {
@@ -387,12 +420,14 @@ void RobotsTxtParser::Parse() {
   // that max url length of 2KB. We want some padding for
   // UTF-8 encoding/nulls/etc. but a much smaller bound would be okay as well.
   // If so, we can ignore the chars on a line past that.
-  const int kMaxLineLen = 2083 * 8;
+  const int kBrowserMaxLineLen = 2083;
+  const int kMaxLineLen = kBrowserMaxLineLen * 8;
   // Allocate a buffer used to process the current line.
   char* const line_buffer = new char[kMaxLineLen];
   // last_line_pos is the last writeable pos within the line array
   // (only a final '\0' may go here).
   const char* const line_buffer_end = line_buffer + kMaxLineLen - 1;
+  bool line_too_long_strict = false;
   char* line_pos = line_buffer;
   int line_num = 0;
   size_t bom_pos = 0;
@@ -413,6 +448,8 @@ void RobotsTxtParser::Parse() {
         // Put in next spot on current line, as long as there's room.
         if (line_pos < line_buffer_end) {
           *(line_pos++) = ch;
+        } else {
+          line_too_long_strict = true;
         }
       } else {                         // Line-ending character char case.
         *line_pos = '\0';
@@ -421,7 +458,8 @@ void RobotsTxtParser::Parse() {
         const bool is_CRLF_continuation =
             (line_pos == line_buffer) && last_was_carriage_return && ch == 0x0A;
         if (!is_CRLF_continuation) {
-          ParseAndEmitLine(++line_num, line_buffer);
+          ParseAndEmitLine(++line_num, line_buffer, &line_too_long_strict);
+          line_too_long_strict = false;
         }
         line_pos = line_buffer;
         last_was_carriage_return = (ch == 0x0D);
@@ -429,7 +467,7 @@ void RobotsTxtParser::Parse() {
     }
   }
   *line_pos = '\0';
-  ParseAndEmitLine(++line_num, line_buffer);
+  ParseAndEmitLine(++line_num, line_buffer, &line_too_long_strict);
   handler_->HandleRobotsEnd();
   delete [] line_buffer;
 }
@@ -527,7 +565,7 @@ bool RobotsMatcher::disallow_ignore_global() const {
   return false;
 }
 
-const int RobotsMatcher::matching_line() const {
+int RobotsMatcher::matching_line() const {
   if (ever_seen_specific_agent_) {
     return Match::HigherPriorityMatch(disallow_.specific, allow_.specific)
         .line();
@@ -652,15 +690,15 @@ void RobotsMatcher::HandleSitemap(int line_num, absl::string_view value) {}
 void RobotsMatcher::HandleUnknownAction(int line_num, absl::string_view action,
                                         absl::string_view value) {}
 
-void ParsedRobotsKey::Parse(absl::string_view key) {
+void ParsedRobotsKey::Parse(absl::string_view key, bool* is_acceptable_typo) {
   key_text_ = absl::string_view();
-  if (KeyIsUserAgent(key)) {
+  if (KeyIsUserAgent(key, is_acceptable_typo)) {
     type_ = USER_AGENT;
-  } else if (KeyIsAllow(key)) {
+  } else if (KeyIsAllow(key, is_acceptable_typo)) {
     type_ = ALLOW;
-  } else if (KeyIsDisallow(key)) {
+  } else if (KeyIsDisallow(key, is_acceptable_typo)) {
     type_ = DISALLOW;
-  } else if (KeyIsSitemap(key)) {
+  } else if (KeyIsSitemap(key, is_acceptable_typo)) {
     type_ = SITEMAP;
   } else {
     type_ = UNKNOWN;
@@ -673,30 +711,37 @@ absl::string_view ParsedRobotsKey::GetUnknownText() const {
   return key_text_;
 }
 
-bool ParsedRobotsKey::KeyIsUserAgent(absl::string_view key) {
-  return (
-      absl::StartsWithIgnoreCase(key, "user-agent") ||
+bool ParsedRobotsKey::KeyIsUserAgent(absl::string_view key,
+                                     bool* is_acceptable_typo) {
+  *is_acceptable_typo =
       (kAllowFrequentTypos && (absl::StartsWithIgnoreCase(key, "useragent") ||
-                               absl::StartsWithIgnoreCase(key, "user agent"))));
+                               absl::StartsWithIgnoreCase(key, "user agent")));
+  return (absl::StartsWithIgnoreCase(key, "user-agent") || *is_acceptable_typo);
 }
 
-bool ParsedRobotsKey::KeyIsAllow(absl::string_view key) {
+bool ParsedRobotsKey::KeyIsAllow(absl::string_view key,
+                                 bool* is_acceptable_typo) {
+  // We don't support typos for the "allow" key.
+  *is_acceptable_typo = false;
   return absl::StartsWithIgnoreCase(key, "allow");
 }
 
-bool ParsedRobotsKey::KeyIsDisallow(absl::string_view key) {
-  return (
-      absl::StartsWithIgnoreCase(key, "disallow") ||
+bool ParsedRobotsKey::KeyIsDisallow(absl::string_view key,
+                                    bool* is_acceptable_typo) {
+  *is_acceptable_typo =
       (kAllowFrequentTypos && ((absl::StartsWithIgnoreCase(key, "dissallow")) ||
                                (absl::StartsWithIgnoreCase(key, "dissalow")) ||
                                (absl::StartsWithIgnoreCase(key, "disalow")) ||
                                (absl::StartsWithIgnoreCase(key, "diasllow")) ||
-                               (absl::StartsWithIgnoreCase(key, "disallaw")))));
+                               (absl::StartsWithIgnoreCase(key, "disallaw"))));
+  return (absl::StartsWithIgnoreCase(key, "disallow") || *is_acceptable_typo);
 }
 
-bool ParsedRobotsKey::KeyIsSitemap(absl::string_view key) {
-  return ((absl::StartsWithIgnoreCase(key, "sitemap")) ||
-          (absl::StartsWithIgnoreCase(key, "site-map")));
+bool ParsedRobotsKey::KeyIsSitemap(absl::string_view key,
+                                   bool* is_acceptable_typo) {
+  *is_acceptable_typo =
+      (kAllowFrequentTypos && (absl::StartsWithIgnoreCase(key, "site-map")));
+  return absl::StartsWithIgnoreCase(key, "sitemap") || *is_acceptable_typo;
 }
 
 }  // namespace googlebot
